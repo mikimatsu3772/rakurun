@@ -1,0 +1,11 @@
+{
+  "name": "inkrush",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "sim": "node sim/run.js",
+    "build": "node build.js",
+    "serve": "python3 -m http.server 8000"
+  }
+}

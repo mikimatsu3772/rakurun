@@ -7,6 +7,10 @@ node_modules/
 .expo/
 dist/
 web-build/
+
+# game/dist はビルド済み配布物としてコミットする (上の dist/ の例外)
+!game/dist/
+!game/dist/inkrush.html
 expo-env.d.ts
 
 # Native

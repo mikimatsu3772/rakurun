@@ -1,0 +1,1543 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="theme-color" content="#1c1c28" />
+<title>INK RUSH — 陣取りインクバトル</title>
+<link rel="icon" href="data:," />
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    background: #12121c;
+    overflow: hidden;
+    touch-action: none;
+    -webkit-user-select: none;
+    user-select: none;
+    overscroll-behavior: none;
+  }
+  body {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  canvas {
+    display: block;
+    border-radius: 6px;
+    touch-action: none;
+  }
+</style>
+</head>
+<body>
+<canvas id="game" width="360" height="640"></canvas>
+<script type="module">
+// ---- src/constants.js ----
+// 全バランスパラメータ。調整はこのファイルに集約する。
+const C = {
+  // ワールド
+  W: 360,
+  H: 640,
+  CELL: 8, // 塗りグリッドのセルサイズ(px)
+  TICK: 1 / 60, // 固定タイムステップ
+  MATCH_TIME: 90, // 試合時間(秒)
+
+  // プレイヤー
+  PLAYER_RADIUS: 10,
+  SWIM_RADIUS: 6, // 潜行中の被弾半径
+  HP_MAX: 100,
+  RUN_SPEED: 115, // 通常移動(px/s)
+  FIRE_MOVE_SPEED: 82, // 射撃中の移動
+  SWIM_SPEED: 215, // 自インク潜行
+  ENEMY_INK_SPEED: 48, // 敵インク上
+  UNPAINTED_SWIM_SPEED: 70, // 自インク以外で潜行ボタンを押しているとき
+  RESPAWN_TIME: 3.0,
+  INVULN_TIME: 1.5,
+
+  // 敵インクのスリップダメージ
+  ENEMY_INK_DPS: 10,
+  ENEMY_INK_HP_FLOOR: 20, // これ未満にはならない
+
+  // インクタンク
+  INK_MAX: 100,
+  INK_COST_PER_SHOT: 2.0,
+  INK_REGEN_STAND: 13, // 毎秒
+  INK_REGEN_SWIM: 50, // 自インク潜行中 毎秒
+  INK_MIN_TO_FIRE: 2.0,
+
+  // 射撃
+  FIRE_INTERVAL: 0.14,
+  SHOT_SPEED: 330,
+  SHOT_RANGE: 150,
+  SHOT_RADIUS: 4,
+  SHOT_DAMAGE: 24,
+  SHOT_SPREAD: 0.13, // 発射角ノイズ(rad)
+  DROPLET_SPACING: 26, // 飛沫を落とす間隔(px)
+  DROPLET_PAINT_RADIUS: 7,
+  SPLASH_PAINT_RADIUS: 13, // 着弾スプラッシュ
+
+  // スペシャル「インクバースト」
+  SPECIAL_POINTS: 1100, // 塗りポイント(新規セル数)で満タン
+  SPECIAL_PAINT_RADIUS: 58,
+  SPECIAL_DAMAGE: 70,
+  SPECIAL_DAMAGE_RADIUS: 46,
+
+  // チーム
+  TEAM_COLORS: [
+    { main: '#ff7a1a', bright: '#ffb066', dark: '#c25200', name: 'オレンジ' },
+    { main: '#2bd4c4', bright: '#8ff0e6', dark: '#0f9487', name: 'ターコイズ' },
+  ],
+};
+
+// ---- src/rng.js ----
+// mulberry32: シード付き擬似乱数。シミュレーションの再現性のため Math.random は使わない。
+function makeRng(seed) {
+  let a = seed >>> 0;
+  return function rng() {
+    a |= 0;
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+// ---- src/map.js ----
+
+
+// 障害物は180度回転対称に配置 (公平性のため)。rect: [x, y, w, h]
+const OBSTACLES = [
+  [130, 285, 100, 70], // 中央ブロック (自己対称)
+  [30, 150, 64, 34],
+  [266, 456, 64, 34], // ↑の対称
+  [246, 210, 84, 30],
+  [30, 400, 84, 30], // ↑の対称
+  [166, 96, 28, 28],
+  [166, 516, 28, 28], // ↑の対称
+];
+
+// スポーン位置: チーム0が下、チーム1が上
+const SPAWNS = [
+  [
+    { x: 140, y: 606 },
+    { x: 220, y: 606 },
+  ],
+  [
+    { x: 220, y: 34 },
+    { x: 140, y: 34 },
+  ],
+];
+
+const GRID_W = Math.floor(C.W / C.CELL);
+const GRID_H = Math.floor(C.H / C.CELL);
+
+// grid値: 0=未塗装, 1=チーム0, 2=チーム1, 3=障害物(塗装不可)
+function makeGrid() {
+  const g = new Uint8Array(GRID_W * GRID_H);
+  for (const [ox, oy, ow, oh] of OBSTACLES) {
+    const x0 = Math.floor(ox / C.CELL);
+    const y0 = Math.floor(oy / C.CELL);
+    const x1 = Math.ceil((ox + ow) / C.CELL);
+    const y1 = Math.ceil((oy + oh) / C.CELL);
+    for (let y = y0; y < y1; y++) {
+      for (let x = x0; x < x1; x++) {
+        if (x >= 0 && x < GRID_W && y >= 0 && y < GRID_H) g[y * GRID_W + x] = 3;
+      }
+    }
+  }
+  return g;
+}
+
+function pointInObstacle(x, y, pad = 0) {
+  for (const [ox, oy, ow, oh] of OBSTACLES) {
+    if (x > ox - pad && x < ox + ow + pad && y > oy - pad && y < oy + oh + pad) return true;
+  }
+  return false;
+}
+
+// 円と障害物・外壁の衝突解決。位置を押し戻した {x, y} を返す。
+function resolveCircle(x, y, r) {
+  x = Math.max(r, Math.min(C.W - r, x));
+  y = Math.max(r, Math.min(C.H - r, y));
+  for (const [ox, oy, ow, oh] of OBSTACLES) {
+    const cx = Math.max(ox, Math.min(ox + ow, x));
+    const cy = Math.max(oy, Math.min(oy + oh, y));
+    const dx = x - cx;
+    const dy = y - cy;
+    const d2 = dx * dx + dy * dy;
+    if (d2 < r * r) {
+      if (d2 > 1e-9) {
+        const d = Math.sqrt(d2);
+        x = cx + (dx / d) * r;
+        y = cy + (dy / d) * r;
+      } else {
+        // 中心が矩形内: 最も近い辺へ押し出す
+        const left = x - ox, right = ox + ow - x, top = y - oy, bottom = oy + oh - y;
+        const m = Math.min(left, right, top, bottom);
+        if (m === left) x = ox - r;
+        else if (m === right) x = ox + ow + r;
+        else if (m === top) y = oy - r;
+        else y = oy + oh + r;
+      }
+    }
+  }
+  return { x, y };
+}
+
+// 線分が障害物と交差するか (視線判定・弾用、粗いサンプリング)
+function segmentBlocked(x0, y0, x1, y1) {
+  const dx = x1 - x0;
+  const dy = y1 - y0;
+  const len = Math.hypot(dx, dy);
+  const steps = Math.max(1, Math.ceil(len / 6));
+  for (let i = 1; i <= steps; i++) {
+    const t = i / steps;
+    if (pointInObstacle(x0 + dx * t, y0 + dy * t)) return true;
+  }
+  return false;
+}
+
+// ---- src/engine.js ----
+
+
+
+
+// 純粋ゲームロジック。描画・入力と完全分離し、Node でもブラウザでも動く。
+// 固定60Hzステップ + シード乱数で決定的に進行する。
+
+function createGame(seed = 1) {
+  const grid = makeGrid();
+  let paintable = 0;
+  for (let i = 0; i < grid.length; i++) if (grid[i] !== 3) paintable++;
+  const players = [];
+  for (let team = 0; team < 2; team++) {
+    for (let slot = 0; slot < 2; slot++) {
+      const sp = SPAWNS[team][slot];
+      players.push({
+        id: players.length,
+        team,
+        slot,
+        x: sp.x,
+        y: sp.y,
+        faceX: 0,
+        faceY: team === 0 ? -1 : 1,
+        hp: C.HP_MAX,
+        ink: C.INK_MAX,
+        dead: false,
+        respawnT: 0,
+        invulnT: C.INVULN_TIME,
+        fireCd: 0,
+        swimming: false,
+        firing: false,
+        special: 0,
+        kills: 0,
+        deaths: 0,
+        painted: 0, // 生涯塗りセル数 (統計用)
+      });
+    }
+  }
+  return {
+    seed,
+    rng: makeRng(seed),
+    time: 0,
+    over: false,
+    grid,
+    paintable,
+    counts: [0, 0], // チームごとの塗りセル数
+    players,
+    shots: [],
+    events: [], // 1ステップ分の演出イベント
+  };
+}
+
+// 半径radiusの円形にチームteamで塗る。新規に自チーム色になったセル数を返す。
+function paint(state, px, py, radius, team) {
+  const { grid } = state;
+  const v = team + 1;
+  const c0x = Math.max(0, Math.floor((px - radius) / C.CELL));
+  const c1x = Math.min(GRID_W - 1, Math.floor((px + radius) / C.CELL));
+  const c0y = Math.max(0, Math.floor((py - radius) / C.CELL));
+  const c1y = Math.min(GRID_H - 1, Math.floor((py + radius) / C.CELL));
+  const r2 = radius * radius;
+  let gained = 0;
+  for (let cy = c0y; cy <= c1y; cy++) {
+    for (let cx = c0x; cx <= c1x; cx++) {
+      const dx = cx * C.CELL + C.CELL / 2 - px;
+      const dy = cy * C.CELL + C.CELL / 2 - py;
+      if (dx * dx + dy * dy > r2) continue;
+      const i = cy * GRID_W + cx;
+      const cur = grid[i];
+      if (cur === 3 || cur === v) continue;
+      if (cur !== 0) state.counts[cur - 1]--;
+      grid[i] = v;
+      state.counts[team]++;
+      gained++;
+      if (state.onPaint) state.onPaint(cx, cy, v);
+    }
+  }
+  return gained;
+}
+
+function groundAt(state, x, y) {
+  const cx = Math.max(0, Math.min(GRID_W - 1, Math.floor(x / C.CELL)));
+  const cy = Math.max(0, Math.min(GRID_H - 1, Math.floor(y / C.CELL)));
+  return state.grid[cy * GRID_W + cx];
+}
+
+function coverage(state) {
+  return [state.counts[0] / state.paintable, state.counts[1] / state.paintable];
+}
+
+function killPlayer(state, p, killer) {
+  p.dead = true;
+  p.hp = 0;
+  p.respawnT = C.RESPAWN_TIME;
+  p.deaths++;
+  p.swimming = false;
+  if (killer) killer.kills++;
+  state.events.push({ type: 'kill', x: p.x, y: p.y, team: p.team, victim: p.id });
+}
+
+function damagePlayer(state, p, dmg, attacker) {
+  if (p.dead || p.invulnT > 0) return;
+  p.hp -= dmg;
+  if (p.hp <= 0) killPlayer(state, p, attacker);
+}
+
+// inputs: プレイヤーidごとの {mx, my, fire, swim, special, aimX, aimY}
+// mx,my は移動ベクトル(長さ<=1)。aimX/aimY は正規化済み射撃方向(省略時は向き)。
+function stepGame(state, inputs) {
+  const dt = C.TICK;
+  state.events = [];
+  if (state.over) return;
+  state.time += dt;
+  if (state.time >= C.MATCH_TIME) {
+    state.over = true;
+    return;
+  }
+
+  for (const p of state.players) {
+    const inp = inputs[p.id] || {};
+
+    // リスポーン処理
+    if (p.dead) {
+      p.respawnT -= dt;
+      if (p.respawnT <= 0) {
+        const sp = SPAWNS[p.team][p.slot];
+        p.x = sp.x;
+        p.y = sp.y;
+        p.hp = C.HP_MAX;
+        p.ink = C.INK_MAX;
+        p.dead = false;
+        p.invulnT = C.INVULN_TIME;
+        p.faceY = p.team === 0 ? -1 : 1;
+        p.faceX = 0;
+      }
+      continue;
+    }
+    if (p.invulnT > 0) p.invulnT -= dt;
+    if (p.fireCd > 0) p.fireCd -= dt;
+
+    const ground = groundAt(state, p.x, p.y);
+    const onOwnInk = ground === p.team + 1;
+    const onEnemyInk = ground === 2 - p.team;
+
+    p.swimming = !!inp.swim;
+    p.firing = !!inp.fire && !p.swimming;
+
+    // 移動
+    let mx = inp.mx || 0;
+    let my = inp.my || 0;
+    const ml = Math.hypot(mx, my);
+    if (ml > 1) {
+      mx /= ml;
+      my /= ml;
+    }
+    if (ml > 0.05) {
+      p.faceX = mx / (ml > 1 ? 1 : ml);
+      p.faceY = my / (ml > 1 ? 1 : ml);
+    }
+    let speed;
+    if (onEnemyInk) speed = p.swimming ? C.ENEMY_INK_SPEED * 0.8 : C.ENEMY_INK_SPEED;
+    else if (p.swimming) speed = onOwnInk ? C.SWIM_SPEED : C.UNPAINTED_SWIM_SPEED;
+    else if (p.firing) speed = C.FIRE_MOVE_SPEED;
+    else speed = C.RUN_SPEED;
+    const pos = resolveCircle(p.x + mx * speed * dt, p.y + my * speed * dt, C.PLAYER_RADIUS);
+    p.x = pos.x;
+    p.y = pos.y;
+
+    // 敵インクのスリップダメージ (HP下限あり)
+    if (onEnemyInk && !p.dead && p.invulnT <= 0 && p.hp > C.ENEMY_INK_HP_FLOOR) {
+      p.hp = Math.max(C.ENEMY_INK_HP_FLOOR, p.hp - C.ENEMY_INK_DPS * dt);
+    }
+
+    // スペシャル発動
+    if (inp.special && p.special >= C.SPECIAL_POINTS) {
+      p.special = 0;
+      const gained = paint(state, p.x, p.y, C.SPECIAL_PAINT_RADIUS, p.team);
+      p.painted += gained;
+      for (const q of state.players) {
+        if (q.team !== p.team && !q.dead) {
+          if (Math.hypot(q.x - p.x, q.y - p.y) <= C.SPECIAL_DAMAGE_RADIUS) {
+            damagePlayer(state, q, C.SPECIAL_DAMAGE, p);
+          }
+        }
+      }
+      state.events.push({ type: 'burst', x: p.x, y: p.y, team: p.team });
+    }
+
+    // 射撃
+    let fired = false;
+    if (p.firing && p.fireCd <= 0 && p.ink >= C.INK_MIN_TO_FIRE) {
+      let ax = inp.aimX;
+      let ay = inp.aimY;
+      if (ax === undefined || (ax === 0 && ay === 0)) {
+        ax = p.faceX;
+        ay = p.faceY;
+      }
+      const al = Math.hypot(ax, ay) || 1;
+      const noise = (state.rng() - 0.5) * 2 * C.SHOT_SPREAD;
+      const cos = Math.cos(noise);
+      const sin = Math.sin(noise);
+      const dx = (ax / al) * cos - (ay / al) * sin;
+      const dy = (ax / al) * sin + (ay / al) * cos;
+      state.shots.push({
+        team: p.team,
+        owner: p.id,
+        x: p.x + dx * (C.PLAYER_RADIUS + 2),
+        y: p.y + dy * (C.PLAYER_RADIUS + 2),
+        vx: dx * C.SHOT_SPEED,
+        vy: dy * C.SHOT_SPEED,
+        dist: 0,
+        drop: 0,
+      });
+      p.ink -= C.INK_COST_PER_SHOT;
+      p.fireCd = C.FIRE_INTERVAL;
+      fired = true;
+      state.events.push({ type: 'shoot', x: p.x, y: p.y, team: p.team });
+    }
+
+    // インク回復 (発射したフレームは回復しない)
+    if (!fired) {
+      const regen = p.swimming && onOwnInk ? C.INK_REGEN_SWIM : C.INK_REGEN_STAND;
+      p.ink = Math.min(C.INK_MAX, p.ink + regen * dt);
+    }
+  }
+
+  // 弾の更新。ダメージは全弾の判定後にまとめて適用し、相打ちが順序依存にならないようにする。
+  const alive = [];
+  const pendingHits = [];
+  for (const s of state.shots) {
+    const step = Math.hypot(s.vx, s.vy) * dt;
+    const nx = s.x + s.vx * dt;
+    const ny = s.y + s.vy * dt;
+    let ended = false;
+
+    // 障害物・外壁
+    if (nx < 0 || nx > C.W || ny < 0 || ny > C.H || pointInObstacle(nx, ny)) {
+      splash(state, s, s.x, s.y);
+      ended = true;
+    }
+
+    // プレイヤー命中
+    if (!ended) {
+      for (const q of state.players) {
+        if (q.team === s.team || q.dead) continue;
+        const hitR = (q.swimming ? C.SWIM_RADIUS : C.PLAYER_RADIUS) + C.SHOT_RADIUS;
+        if (Math.hypot(q.x - nx, q.y - ny) <= hitR) {
+          pendingHits.push({ target: q, attacker: state.players[s.owner] });
+          splash(state, s, nx, ny);
+          ended = true;
+          break;
+        }
+      }
+    }
+
+    if (!ended) {
+      s.x = nx;
+      s.y = ny;
+      s.dist += step;
+      s.drop += step;
+      if (s.drop >= C.DROPLET_SPACING) {
+        s.drop -= C.DROPLET_SPACING;
+        const g = paint(state, s.x, s.y, C.DROPLET_PAINT_RADIUS, s.team);
+        state.players[s.owner].special += g;
+        state.players[s.owner].painted += g;
+      }
+      if (s.dist >= C.SHOT_RANGE) {
+        splash(state, s, s.x, s.y);
+        ended = true;
+      }
+    }
+    if (!ended) alive.push(s);
+  }
+  state.shots = alive;
+  for (const h of pendingHits) damagePlayer(state, h.target, C.SHOT_DAMAGE, h.attacker);
+}
+
+function splash(state, shot, x, y) {
+  const g = paint(state, x, y, C.SPLASH_PAINT_RADIUS, shot.team);
+  const owner = state.players[shot.owner];
+  owner.special += g;
+  owner.painted += g;
+  state.events.push({ type: 'splash', x, y, team: shot.team });
+}
+
+// ---- src/bot.js ----
+
+
+
+
+// Bot AI。0.25秒間隔(個体ジッタ付き)で意思決定し、フレームごとの入力を生成する。
+// difficulty: 0.0(弱)〜1.0(強)。エイムノイズと反応間隔に影響。
+
+function createBot(playerId, rng, difficulty = 0.75) {
+  return {
+    playerId,
+    rng,
+    difficulty,
+    thinkT: rng() * 0.25,
+    mode: 'paint',
+    targetX: C.W / 2,
+    targetY: C.H / 2,
+    engageId: -1,
+    strafeDir: rng() < 0.5 ? 1 : -1,
+    fireHold: false,
+    burstT: 0,
+  };
+}
+
+function pickPaintTarget(bot, state, p) {
+  // 未塗装・敵色セルを重み付きサンプリングして目的地を選ぶ
+  const enemyV = 2 - p.team;
+  let bestScore = -Infinity;
+  let bx = C.W / 2;
+  let by = C.H / 2;
+  // 弱いBotほど候補地の吟味が雑になる (塗り効率に難易度を効かせる)
+  const samples = 6 + Math.round(bot.difficulty * 8);
+  for (let k = 0; k < samples; k++) {
+    const cx = Math.floor(bot.rng() * GRID_W);
+    const cy = Math.floor(bot.rng() * GRID_H);
+    const v = state.grid[cy * GRID_W + cx];
+    if (v === 3 || v === p.team + 1) continue;
+    const x = cx * C.CELL + C.CELL / 2;
+    const y = cy * C.CELL + C.CELL / 2;
+    // 周辺の塗り価値 (未塗装/敵色の密度)
+    let value = 0;
+    for (let dy = -2; dy <= 2; dy++) {
+      for (let dx = -2; dx <= 2; dx++) {
+        const nx = cx + dx;
+        const ny = cy + dy;
+        if (nx < 0 || nx >= GRID_W || ny < 0 || ny >= GRID_H) continue;
+        const nv = state.grid[ny * GRID_W + nx];
+        if (nv === 0) value += 1;
+        else if (nv === enemyV) value += 1.4;
+      }
+    }
+    const dist = Math.hypot(x - p.x, y - p.y);
+    const score = value - dist * 0.045;
+    if (score > bestScore) {
+      bestScore = score;
+      bx = x;
+      by = y;
+    }
+  }
+  bot.targetX = bx;
+  bot.targetY = by;
+}
+
+function think(bot, state, p) {
+  const enemies = state.players.filter((q) => q.team !== p.team && !q.dead && q.invulnT <= 0);
+
+  // インク切れ → 回復モード
+  if (p.ink < 14) {
+    bot.mode = 'recover';
+    bot.engageId = -1;
+    return;
+  }
+  if (bot.mode === 'recover' && p.ink < 70) return; // 回復継続
+
+  // 近くの敵と交戦するか
+  let nearest = null;
+  let nd = Infinity;
+  for (const q of enemies) {
+    const d = Math.hypot(q.x - p.x, q.y - p.y);
+    if (d < nd && !segmentBlocked(p.x, p.y, q.x, q.y)) {
+      nd = d;
+      nearest = q;
+    }
+  }
+  const endgame = C.MATCH_TIME - state.time < 20; // 終盤は塗り優先
+  const engageRange = endgame ? 75 : 100;
+  // 塗りゲーなので毎回は喧嘩を買わない
+  if (nearest && nd < engageRange && p.hp > 55 && bot.rng() > 0.6) {
+    bot.mode = 'engage';
+    bot.engageId = nearest.id;
+    if (bot.rng() < 0.3) bot.strafeDir = -bot.strafeDir;
+    return;
+  }
+
+  bot.mode = 'paint';
+  bot.engageId = -1;
+  const distToTarget = Math.hypot(bot.targetX - p.x, bot.targetY - p.y);
+  const targetGround = groundAt(state, bot.targetX, bot.targetY);
+  if (distToTarget < 30 || targetGround === p.team + 1 || bot.rng() < 0.15) {
+    pickPaintTarget(bot, state, p);
+  }
+}
+
+// 毎フレーム呼び、engine用の入力 {mx,my,fire,swim,special,aimX,aimY} を返す
+function botInput(bot, state) {
+  const p = state.players[bot.playerId];
+  if (p.dead) {
+    bot.mode = 'paint';
+    return {};
+  }
+
+  bot.thinkT -= C.TICK;
+  if (bot.thinkT <= 0) {
+    bot.thinkT = 0.2 + (1 - bot.difficulty) * 0.5 + bot.rng() * 0.08;
+    think(bot, state, p);
+  }
+
+  const inp = { mx: 0, my: 0, fire: false, swim: false, special: false, aimX: 0, aimY: 0 };
+
+  // スペシャル: 満タンで敵が近い or 塗りたい地点が近い
+  if (p.special >= C.SPECIAL_POINTS) {
+    const enemyNear = state.players.some(
+      (q) => q.team !== p.team && !q.dead && Math.hypot(q.x - p.x, q.y - p.y) < 110
+    );
+    if (enemyNear || groundAt(state, p.x, p.y) !== p.team + 1 || bot.rng() < 0.02) inp.special = true;
+  }
+
+  if (bot.mode === 'recover') {
+    // 自インク上で潜行してタンク回復。自インクにいなければ足元を塗ってから潜る
+    if (groundAt(state, p.x, p.y) === p.team + 1) {
+      inp.swim = true;
+      inp.mx = Math.sin(state.time * 3 + p.id) * 0.3;
+      inp.my = Math.cos(state.time * 3 + p.id) * 0.3;
+    } else if (p.ink >= C.INK_MIN_TO_FIRE) {
+      inp.fire = true;
+      inp.aimX = p.faceX;
+      inp.aimY = p.faceY;
+    } else {
+      inp.swim = true; // 塗れないなら這って自陣方向へ
+      inp.my = p.team === 0 ? 1 : -1;
+    }
+    return inp;
+  }
+
+  if (bot.mode === 'engage') {
+    const q = state.players[bot.engageId];
+    if (!q || q.dead) {
+      bot.mode = 'paint';
+    } else {
+      const dx = q.x - p.x;
+      const dy = q.y - p.y;
+      const d = Math.hypot(dx, dy) || 1;
+      // 偏差撃ち + 難易度依存ノイズ
+      const lead = d / C.SHOT_SPEED * 0.6;
+      const noise = 0.15 + (1 - bot.difficulty) * 1.1;
+      let ax = dx + (q.vxEst || 0) * lead + (bot.rng() - 0.5) * noise * d;
+      let ay = dy + (q.vyEst || 0) * lead + (bot.rng() - 0.5) * noise * d;
+      const al = Math.hypot(ax, ay) || 1;
+      inp.aimX = ax / al;
+      inp.aimY = ay / al;
+      inp.fire = p.ink >= C.INK_MIN_TO_FIRE;
+      // 距離を保ちつつストレイフ
+      const ideal = C.SHOT_RANGE * 0.7;
+      const approach = d > ideal ? 0.7 : -0.5;
+      inp.mx = (dx / d) * approach + (-dy / d) * bot.strafeDir * 0.7;
+      inp.my = (dy / d) * approach + (dx / d) * bot.strafeDir * 0.7;
+      return inp;
+    }
+  }
+
+  // paint モード: 目的地へ移動しながら進行方向を塗る
+  const dx = bot.targetX - p.x;
+  const dy = bot.targetY - p.y;
+  const d = Math.hypot(dx, dy) || 1;
+  let mx = dx / d;
+  let my = dy / d;
+  // 障害物の簡易回避: 少し先が壁ならスライド
+  if (pointInObstacle(p.x + mx * 26, p.y + my * 26, C.PLAYER_RADIUS)) {
+    const t = mx;
+    mx = -my * bot.strafeDir;
+    my = t * bot.strafeDir;
+  }
+  inp.mx = mx;
+  inp.my = my;
+
+  const onOwnInk = groundAt(state, p.x, p.y) === p.team + 1;
+  const ground = groundAt(state, p.x + mx * 30, p.y + my * 30);
+  if (onOwnInk && ground === p.team + 1 && p.ink > 55 && d > 70) {
+    // 進路が既に自色なら潜行で高速移動
+    inp.swim = true;
+  } else {
+    // 進行方向を塗りながら進む (インク節約のためバースト射撃)。
+    // 射撃の手数も難易度でスケールさせる。
+    bot.burstT += C.TICK;
+    const duty = 0.45 + bot.difficulty * 0.25;
+    const cycle = bot.burstT % 0.9;
+    inp.fire = cycle < 0.9 * duty && p.ink >= C.INK_MIN_TO_FIRE;
+    inp.aimX = mx;
+    inp.aimY = my;
+  }
+  return inp;
+}
+
+// ---- src/render.js ----
+
+
+
+// Canvas 2D 描画。塗りグリッドは低解像度オフスクリーンに描いて拡大し、
+// インクらしい柔らかいエッジを出す。
+
+function hexToRgb(hex) {
+  return [parseInt(hex.slice(1, 3), 16), parseInt(hex.slice(3, 5), 16), parseInt(hex.slice(5, 7), 16)];
+}
+
+function createRenderer(canvas) {
+  const ctx = canvas.getContext('2d');
+  const ink = document.createElement('canvas');
+  ink.width = GRID_W;
+  ink.height = GRID_H;
+  const inkCtx = ink.getContext('2d');
+  const inkImg = inkCtx.createImageData(GRID_W, GRID_H);
+
+  const GROUND = [38, 38, 52];
+  const palette = [GROUND, hexToRgb(C.TEAM_COLORS[0].main), hexToRgb(C.TEAM_COLORS[1].main), [22, 22, 30]];
+
+  let particles = [];
+  let shake = 0;
+
+  function addEvents(events, myId) {
+    for (const e of events) {
+      const col = C.TEAM_COLORS[e.team];
+      if (e.type === 'splash') {
+        particles.push({ type: 'ring', x: e.x, y: e.y, r: 4, dr: 60, life: 0.25, t: 0, color: col.bright, lw: 2 });
+      } else if (e.type === 'kill') {
+        particles.push({ type: 'ring', x: e.x, y: e.y, r: 6, dr: 160, life: 0.5, t: 0, color: col.main, lw: 5 });
+        for (let i = 0; i < 10; i++) {
+          const a = (i / 10) * Math.PI * 2;
+          particles.push({
+            type: 'blob', x: e.x, y: e.y, vx: Math.cos(a) * (40 + 60 * Math.random()),
+            vy: Math.sin(a) * (40 + 60 * Math.random()), r: 3 + Math.random() * 4, life: 0.6, t: 0, color: col.main,
+          });
+        }
+        if (e.victim === myId) shake = 0.35;
+      } else if (e.type === 'burst') {
+        particles.push({ type: 'ring', x: e.x, y: e.y, r: 10, dr: (C.SPECIAL_PAINT_RADIUS - 10) / 0.4, life: 0.4, t: 0, color: col.bright, lw: 8 });
+        shake = Math.max(shake, 0.25);
+      }
+    }
+  }
+
+  function drawInk(state) {
+    const d = inkImg.data;
+    const g = state.grid;
+    for (let i = 0; i < g.length; i++) {
+      const p = palette[g[i]];
+      const j = i * 4;
+      d[j] = p[0];
+      d[j + 1] = p[1];
+      d[j + 2] = p[2];
+      d[j + 3] = 255;
+    }
+    inkCtx.putImageData(inkImg, 0, 0);
+    ctx.imageSmoothingEnabled = true;
+    ctx.drawImage(ink, 0, 0, GRID_W, GRID_H, 0, 0, C.W, C.H);
+  }
+
+  function drawObstacles() {
+    for (const [x, y, w, h] of OBSTACLES) {
+      ctx.fillStyle = 'rgba(0,0,0,0.35)';
+      ctx.fillRect(x + 3, y + 4, w, h);
+      ctx.fillStyle = '#4a4a63';
+      ctx.fillRect(x, y, w, h);
+      ctx.fillStyle = '#5d5d7d';
+      ctx.fillRect(x, y, w, 5);
+    }
+  }
+
+  function drawPlayer(p, myId, time) {
+    if (p.dead) return;
+    const col = C.TEAM_COLORS[p.team];
+    const blink = p.invulnT > 0 && Math.floor(time * 10) % 2 === 0;
+    ctx.save();
+    ctx.translate(p.x, p.y);
+    ctx.globalAlpha = blink ? 0.35 : 1;
+    const ang = Math.atan2(p.faceY, p.faceX);
+    if (p.swimming) {
+      // イカ潜行: 進行方向に伸びた雫形
+      ctx.rotate(ang);
+      ctx.fillStyle = col.dark;
+      ctx.beginPath();
+      ctx.ellipse(0, 0, 13, 6.5, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = col.bright;
+      ctx.beginPath();
+      ctx.ellipse(3, 0, 6, 3.5, 0, 0, Math.PI * 2);
+      ctx.fill();
+    } else {
+      // 本体
+      ctx.fillStyle = 'rgba(0,0,0,0.3)';
+      ctx.beginPath();
+      ctx.arc(1.5, 2.5, C.PLAYER_RADIUS, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = col.main;
+      ctx.beginPath();
+      ctx.arc(0, 0, C.PLAYER_RADIUS, 0, Math.PI * 2);
+      ctx.fill();
+      // 頭のトンガリ (向き)
+      ctx.rotate(ang);
+      ctx.beginPath();
+      ctx.moveTo(C.PLAYER_RADIUS + 6, 0);
+      ctx.lineTo(2, -7);
+      ctx.lineTo(2, 7);
+      ctx.closePath();
+      ctx.fillStyle = col.dark;
+      ctx.fill();
+      // 目
+      ctx.fillStyle = '#fff';
+      ctx.beginPath();
+      ctx.arc(4, -4, 3.2, 0, Math.PI * 2);
+      ctx.arc(4, 4, 3.2, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#1a1a24';
+      ctx.beginPath();
+      ctx.arc(5.2, -4, 1.6, 0, Math.PI * 2);
+      ctx.arc(5.2, 4, 1.6, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+
+    // 自機マーカー + インクリング + HPリング
+    if (p.id === myId) {
+      ctx.strokeStyle = 'rgba(255,255,255,0.9)';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, C.PLAYER_RADIUS + 7, -Math.PI / 2, -Math.PI / 2 + (p.ink / C.INK_MAX) * Math.PI * 2);
+      ctx.stroke();
+      if (p.hp < C.HP_MAX) {
+        ctx.strokeStyle = p.hp < 40 ? '#ff4455' : 'rgba(120,255,120,0.8)';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, C.PLAYER_RADIUS + 11, -Math.PI / 2, -Math.PI / 2 + (p.hp / C.HP_MAX) * Math.PI * 2);
+        ctx.stroke();
+      }
+    }
+  }
+
+  function drawShots(state) {
+    for (const s of state.shots) {
+      const col = C.TEAM_COLORS[s.team];
+      ctx.fillStyle = col.bright;
+      ctx.beginPath();
+      ctx.arc(s.x, s.y, C.SHOT_RADIUS, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = col.main;
+      ctx.beginPath();
+      ctx.arc(s.x - s.vx * 0.02, s.y - s.vy * 0.02, C.SHOT_RADIUS * 0.7, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  function drawParticles(dt) {
+    const keep = [];
+    for (const pt of particles) {
+      pt.t += dt;
+      if (pt.t < pt.life) keep.push(pt);
+      else continue;
+      const k = pt.t / pt.life;
+      ctx.globalAlpha = 1 - k;
+      if (pt.type === 'ring') {
+        ctx.strokeStyle = pt.color;
+        ctx.lineWidth = pt.lw * (1 - k) + 0.5;
+        ctx.beginPath();
+        ctx.arc(pt.x, pt.y, pt.r + pt.dr * pt.t, 0, Math.PI * 2);
+        ctx.stroke();
+      } else {
+        pt.x += pt.vx * dt;
+        pt.y += pt.vy * dt;
+        ctx.fillStyle = pt.color;
+        ctx.beginPath();
+        ctx.arc(pt.x, pt.y, pt.r * (1 - k * 0.5), 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+    ctx.globalAlpha = 1;
+    particles = keep;
+  }
+
+  function drawMeter(state) {
+    const [c0, c1] = [state.counts[0] / state.paintable, state.counts[1] / state.paintable];
+    const x0 = 14;
+    const x1 = C.W - 14;
+    const w = x1 - x0;
+    const y = 14;
+    const h = 12;
+    ctx.fillStyle = 'rgba(0,0,0,0.55)';
+    roundRect(x0 - 3, y - 3, w + 6, h + 6, 8);
+    ctx.fill();
+    ctx.fillStyle = '#55556d';
+    roundRect(x0, y, w, h, 5);
+    ctx.fill();
+    ctx.fillStyle = C.TEAM_COLORS[0].main;
+    if (c0 > 0) {
+      roundRect(x0, y, Math.max(6, w * c0), h, 5);
+      ctx.fill();
+    }
+    ctx.fillStyle = C.TEAM_COLORS[1].main;
+    if (c1 > 0) {
+      roundRect(x1 - Math.max(6, w * c1), y, Math.max(6, w * c1), h, 5);
+      ctx.fill();
+    }
+  }
+
+  function roundRect(x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+  }
+
+  function drawTimer(state) {
+    const remain = Math.max(0, C.MATCH_TIME - state.time);
+    const s = Math.ceil(remain);
+    ctx.font = 'bold 26px system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    ctx.lineWidth = 5;
+    ctx.strokeStyle = 'rgba(0,0,0,0.6)';
+    ctx.fillStyle = remain < 10 ? '#ff5566' : '#ffffff';
+    const label = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+    ctx.strokeText(label, C.W / 2, 34);
+    ctx.fillText(label, C.W / 2, 34);
+  }
+
+  function drawButton(b, active, label, sub, fill) {
+    ctx.beginPath();
+    ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2);
+    ctx.fillStyle = active ? 'rgba(255,255,255,0.35)' : 'rgba(255,255,255,0.14)';
+    ctx.fill();
+    if (fill !== undefined) {
+      // ゲージ扇形
+      ctx.beginPath();
+      ctx.moveTo(b.x, b.y);
+      ctx.arc(b.x, b.y, b.r - 2, -Math.PI / 2, -Math.PI / 2 + fill * Math.PI * 2);
+      ctx.closePath();
+      ctx.fillStyle = fill >= 1 ? 'rgba(255,235,80,0.85)' : 'rgba(255,255,255,0.25)';
+      ctx.fill();
+    }
+    ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.fillStyle = fill >= 1 ? '#332b00' : '#ffffff';
+    ctx.font = `bold ${Math.round(b.r * 0.42)}px system-ui, sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(label, b.x, b.y - (sub ? 5 : 0));
+    if (sub) {
+      ctx.font = `${Math.round(b.r * 0.26)}px system-ui, sans-serif`;
+      ctx.fillText(sub, b.x, b.y + b.r * 0.34);
+    }
+  }
+
+  function drawJoystick(joy) {
+    if (!joy.active) return;
+    ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(joy.ox, joy.oy, 44, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.fillStyle = 'rgba(255,255,255,0.45)';
+    ctx.beginPath();
+    ctx.arc(joy.ox + joy.dx * 44, joy.oy + joy.dy * 44, 20, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // メインの描画: 試合画面
+  function drawMatch(state, ui, dt) {
+    ctx.save();
+    if (shake > 0) {
+      shake = Math.max(0, shake - dt);
+      const s = shake * 12;
+      ctx.translate((Math.random() - 0.5) * s, (Math.random() - 0.5) * s);
+    }
+    drawInk(state);
+    drawObstacles();
+    drawShots(state);
+    // スポーン地点マーカー
+    for (let t = 0; t < 2; t++) {
+      ctx.strokeStyle = C.TEAM_COLORS[t].bright;
+      ctx.lineWidth = 2;
+      ctx.setLineDash([5, 5]);
+      ctx.beginPath();
+      ctx.arc(180, t === 0 ? 606 : 34, 26, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+    for (const p of state.players) drawPlayer(p, ui.myId, state.time);
+    drawParticles(dt);
+    ctx.restore();
+
+    drawMeter(state);
+    drawTimer(state);
+
+    if (!ui.auto) {
+      const me = state.players[ui.myId];
+      drawJoystick(ui.joy);
+      drawButton(ui.buttons.fire, ui.buttons.fire.held, 'FIRE', null);
+      drawButton(ui.buttons.swim, ui.buttons.swim.held, 'SWIM', null);
+      drawButton(ui.buttons.special, false, 'SP', null, Math.min(1, me.special / C.SPECIAL_POINTS));
+      if (me.dead) {
+        ctx.fillStyle = 'rgba(0,0,0,0.45)';
+        ctx.fillRect(0, 0, C.W, C.H);
+        ctx.fillStyle = '#fff';
+        ctx.font = 'bold 30px system-ui, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('やられた…', C.W / 2, C.H / 2 - 20);
+        ctx.font = '20px system-ui, sans-serif';
+        ctx.fillText(`復活まで ${Math.ceil(me.respawnT)}`, C.W / 2, C.H / 2 + 16);
+      }
+    }
+  }
+
+  function clear() {
+    ctx.fillStyle = '#1c1c28';
+    ctx.fillRect(0, 0, C.W, C.H);
+  }
+
+  return { ctx, clear, drawMatch, addEvents, roundRect, drawButton };
+}
+
+// ---- src/input.js ----
+
+
+// タッチ/マウス/キーボード入力。左半面は動的出現の仮想スティック、
+// 右下は FIRE / SWIM / SPECIAL ボタン。
+
+const BUTTONS = {
+  fire: { x: 298, y: 548, r: 44, held: false },
+  swim: { x: 218, y: 596, r: 30, held: false },
+  special: { x: 316, y: 448, r: 26, held: false },
+};
+
+function createInput(canvas, toGame) {
+  const joy = { active: false, id: -1, ox: 0, oy: 0, dx: 0, dy: 0 };
+  const touches = new Map(); // pointerId -> 'joy' | 'fire' | 'swim' | 'special'
+  const keys = new Set();
+  let specialTapped = false;
+  let anyTap = null; // 直近のタップ座標 (画面遷移用)
+
+  function buttonAt(x, y) {
+    for (const [name, b] of Object.entries(BUTTONS)) {
+      if (Math.hypot(x - b.x, y - b.y) <= b.r + 8) return name;
+    }
+    return null;
+  }
+
+  function down(e) {
+    const { x, y } = toGame(e);
+    anyTap = { x, y };
+    const b = buttonAt(x, y);
+    if (b) {
+      touches.set(e.pointerId, b);
+      BUTTONS[b].held = true;
+      if (b === 'special') specialTapped = true;
+    } else if (x < 210 && !joy.active) {
+      joy.active = true;
+      joy.id = e.pointerId;
+      joy.ox = x;
+      joy.oy = y;
+      joy.dx = 0;
+      joy.dy = 0;
+      touches.set(e.pointerId, 'joy');
+    }
+  }
+
+  function move(e) {
+    if (touches.get(e.pointerId) !== 'joy') return;
+    const { x, y } = toGame(e);
+    let dx = (x - joy.ox) / 44;
+    let dy = (y - joy.oy) / 44;
+    const l = Math.hypot(dx, dy);
+    if (l > 1) {
+      dx /= l;
+      dy /= l;
+    }
+    joy.dx = dx;
+    joy.dy = dy;
+  }
+
+  function up(e) {
+    const t = touches.get(e.pointerId);
+    if (t === 'joy') {
+      joy.active = false;
+      joy.dx = 0;
+      joy.dy = 0;
+    } else if (t) {
+      BUTTONS[t].held = false;
+    }
+    touches.delete(e.pointerId);
+  }
+
+  canvas.addEventListener('pointerdown', down);
+  canvas.addEventListener('pointermove', move);
+  canvas.addEventListener('pointerup', up);
+  canvas.addEventListener('pointercancel', up);
+
+  // デスクトップ検証用キーボード (WASD/矢印 + J=FIRE K=SWIM L=SP)
+  window.addEventListener('keydown', (e) => {
+    keys.add(e.key.toLowerCase());
+    if (e.key.toLowerCase() === 'l') specialTapped = true;
+  });
+  window.addEventListener('keyup', (e) => keys.delete(e.key.toLowerCase()));
+
+  // engine 用のプレイヤー入力を組み立てる。autoAim は main.js 側で解決。
+  function readPlayerInput() {
+    let mx = joy.dx;
+    let my = joy.dy;
+    if (keys.has('a') || keys.has('arrowleft')) mx -= 1;
+    if (keys.has('d') || keys.has('arrowright')) mx += 1;
+    if (keys.has('w') || keys.has('arrowup')) my -= 1;
+    if (keys.has('s') || keys.has('arrowdown')) my += 1;
+    const inp = {
+      mx,
+      my,
+      fire: BUTTONS.fire.held || keys.has('j'),
+      swim: BUTTONS.swim.held || keys.has('k'),
+      special: specialTapped,
+    };
+    specialTapped = false;
+    return inp;
+  }
+
+  function consumeTap() {
+    const t = anyTap;
+    anyTap = null;
+    return t;
+  }
+
+  return { joy, buttons: BUTTONS, readPlayerInput, consumeTap };
+}
+
+// ---- src/main.js ----
+
+
+
+
+
+
+
+
+const params = new URLSearchParams(location.search);
+const AUTO = params.get('auto') === '1'; // プレイヤーもBotが操作 (デモ/テスト用)
+const SEED = parseInt(params.get('seed') || String((Date.now() % 100000) + 1), 10);
+
+const canvas = document.getElementById('game');
+const renderer = createRenderer(canvas);
+const ctx = renderer.ctx;
+
+let drawScale = 1;
+function resize() {
+  const scale = Math.min(window.innerWidth / C.W, window.innerHeight / C.H);
+  const dpr = window.devicePixelRatio || 1;
+  canvas.style.width = `${C.W * scale}px`;
+  canvas.style.height = `${C.H * scale}px`;
+  canvas.width = Math.round(C.W * scale * dpr);
+  canvas.height = Math.round(C.H * scale * dpr);
+  drawScale = scale * dpr;
+}
+window.addEventListener('resize', resize);
+resize();
+
+function toGame(e) {
+  const r = canvas.getBoundingClientRect();
+  return { x: ((e.clientX - r.left) / r.width) * C.W, y: ((e.clientY - r.top) / r.height) * C.H };
+}
+const input = createInput(canvas, toGame);
+
+// ---- 効果音 (WebAudio 簡易シンセ) ----
+let audio = null;
+function ensureAudio() {
+  if (!audio) {
+    try {
+      audio = new (window.AudioContext || window.webkitAudioContext)();
+    } catch {
+      audio = false;
+    }
+  }
+  if (audio && audio.state === 'suspended') audio.resume();
+}
+canvas.addEventListener('pointerdown', ensureAudio);
+function beep(freq, dur, type = 'square', gain = 0.04, slide = 0) {
+  if (!audio) return;
+  const o = audio.createOscillator();
+  const g = audio.createGain();
+  o.type = type;
+  o.frequency.value = freq;
+  if (slide) o.frequency.linearRampToValueAtTime(freq + slide, audio.currentTime + dur);
+  g.gain.value = gain;
+  g.gain.exponentialRampToValueAtTime(0.001, audio.currentTime + dur);
+  o.connect(g).connect(audio.destination);
+  o.start();
+  o.stop(audio.currentTime + dur);
+}
+
+// ---- 難易度 ----
+const DIFFS = [
+  { label: 'よわい', value: 0.35 },
+  { label: 'ふつう', value: 0.6 },
+  { label: 'つよい', value: 0.85 },
+];
+let diffIndex = params.get('diff') ? parseInt(params.get('diff'), 10) : 1;
+const ALLY_DIFF = 0.7;
+
+// ---- 状態 ----
+let mode = 'title'; // title | countdown | play | result
+let state = null;
+let bots = [];
+let countdownT = 0;
+let resultT = 0;
+let result = null;
+let seedCounter = SEED;
+const MY_ID = 0;
+
+function startMatch() {
+  seedCounter = (seedCounter * 1664525 + 1013904223) >>> 0 || 1;
+  state = createGame(seedCounter);
+  const botRng = makeRng(seedCounter ^ 0x51ab3d);
+  const enemyDiff = DIFFS[diffIndex].value;
+  bots = state.players
+    .filter((p) => AUTO || p.id !== MY_ID)
+    .map((p) => createBot(p.id, botRng, p.team === 0 ? ALLY_DIFF : enemyDiff));
+  mode = 'countdown';
+  countdownT = 2.4;
+}
+
+// 緩いオートエイム: 撃ちたい方向の±70度以内で最も近い視線の通る敵に吸着
+function autoAim(me, inp) {
+  let ax = inp.mx;
+  let ay = inp.my;
+  if (Math.hypot(ax, ay) < 0.05) {
+    ax = me.faceX;
+    ay = me.faceY;
+  }
+  let best = null;
+  let bd = C.SHOT_RANGE * 1.2;
+  for (const q of state.players) {
+    if (q.team === me.team || q.dead || q.invulnT > 0) continue;
+    const dx = q.x - me.x;
+    const dy = q.y - me.y;
+    const d = Math.hypot(dx, dy);
+    if (d > bd) continue;
+    const dot = (dx * ax + dy * ay) / (d * (Math.hypot(ax, ay) || 1));
+    if (dot < 0.34) continue; // 約±70度
+    if (segmentBlocked(me.x, me.y, q.x, q.y)) continue;
+    bd = d;
+    best = q;
+  }
+  if (best) {
+    const d = Math.hypot(best.x - me.x, best.y - me.y) || 1;
+    inp.aimX = (best.x - me.x) / d;
+    inp.aimY = (best.y - me.y) / d;
+  } else {
+    const l = Math.hypot(ax, ay) || 1;
+    inp.aimX = ax / l;
+    inp.aimY = ay / l;
+  }
+}
+
+function stepPlay() {
+  const inputs = [];
+  if (!AUTO) {
+    const me = state.players[MY_ID];
+    const inp = input.readPlayerInput();
+    if (inp.fire && !inp.swim) autoAim(me, inp);
+    inputs[MY_ID] = inp;
+  }
+  for (const b of bots) inputs[b.playerId] = botInput(b, state);
+  stepGame(state, inputs);
+  renderer.addEvents(state.events, AUTO ? -1 : MY_ID);
+  for (const e of state.events) {
+    if (e.type === 'shoot' && e.team === 0) beep(720 + Math.random() * 120, 0.05, 'square', 0.015);
+    else if (e.type === 'kill') beep(e.team === 0 ? 200 : 420, 0.3, 'sawtooth', 0.05, -120);
+    else if (e.type === 'burst') beep(180, 0.5, 'sawtooth', 0.06, 400);
+  }
+  if (state.over) {
+    const [c0, c1] = coverage(state);
+    const me = state.players[MY_ID];
+    result = {
+      c0,
+      c1,
+      win: c0 > c1 ? 0 : c1 > c0 ? 1 : -1,
+      kills: me.kills,
+      deaths: me.deaths,
+      painted: me.painted,
+    };
+    mode = 'result';
+    resultT = 0;
+    beep(880, 0.6, 'triangle', 0.06, -300);
+  }
+}
+
+// ---- タイトル画面の飾り ----
+const titleBlobs = [];
+{
+  const r = makeRng(7);
+  for (let i = 0; i < 26; i++) {
+    titleBlobs.push({ x: r() * C.W, y: r() * C.H, r: 14 + r() * 42, team: r() < 0.5 ? 0 : 1, a: 0.14 + r() * 0.2 });
+  }
+}
+
+function hitCircle(t, x, y, r) {
+  return t && Math.hypot(t.x - x, t.y - y) <= r;
+}
+function hitRect(t, x, y, w, h) {
+  return t && t.x >= x && t.x <= x + w && t.y >= y && t.y <= y + h;
+}
+
+function drawTitle() {
+  renderer.clear();
+  for (const b of titleBlobs) {
+    ctx.globalAlpha = b.a;
+    ctx.fillStyle = C.TEAM_COLORS[b.team].main;
+    ctx.beginPath();
+    ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.font = 'bold 58px system-ui, sans-serif';
+  ctx.lineWidth = 10;
+  ctx.strokeStyle = '#12121c';
+  ctx.strokeText('INK RUSH', C.W / 2, 150);
+  ctx.fillStyle = C.TEAM_COLORS[0].main;
+  ctx.fillText('INK RUSH', C.W / 2, 150);
+  ctx.font = '16px system-ui, sans-serif';
+  ctx.fillStyle = '#cfd0e0';
+  ctx.fillText('90秒の陣取りインクバトル 2 vs 2', C.W / 2, 196);
+
+  // 難易度選択
+  ctx.font = '14px system-ui, sans-serif';
+  ctx.fillStyle = '#9a9bb0';
+  ctx.fillText('あいての強さ', C.W / 2, 300);
+  for (let i = 0; i < DIFFS.length; i++) {
+    const x = 60 + i * 90;
+    const sel = i === diffIndex;
+    ctx.fillStyle = sel ? C.TEAM_COLORS[1].main : 'rgba(255,255,255,0.12)';
+    renderer.roundRect(x, 320, 78, 40, 12);
+    ctx.fill();
+    ctx.fillStyle = sel ? '#062a27' : '#e8e8f2';
+    ctx.font = `bold 17px system-ui, sans-serif`;
+    ctx.fillText(DIFFS[i].label, x + 39, 341);
+  }
+
+  // START
+  ctx.fillStyle = C.TEAM_COLORS[0].main;
+  renderer.roundRect(70, 420, 220, 64, 32);
+  ctx.fill();
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 28px system-ui, sans-serif';
+  ctx.fillText('スタート!', C.W / 2, 453);
+
+  ctx.font = '12px system-ui, sans-serif';
+  ctx.fillStyle = '#8a8b9e';
+  ctx.fillText('左半分ドラッグ: 移動 / FIRE: 撃つ / SWIM: イカ潜行', C.W / 2, 560);
+  ctx.fillText('地面を塗って、時間切れの時に広いほうが勝ち!', C.W / 2, 580);
+
+  const t = input.consumeTap();
+  if (hitRect(t, 70, 420, 220, 64)) {
+    beep(660, 0.12, 'triangle', 0.06, 200);
+    startMatch();
+  } else {
+    for (let i = 0; i < DIFFS.length; i++) {
+      if (hitRect(t, 60 + i * 90, 320, 78, 40)) {
+        diffIndex = i;
+        beep(500 + i * 150, 0.08, 'triangle', 0.05);
+      }
+    }
+  }
+}
+
+function drawCountdown(dt) {
+  renderer.clear();
+  renderer.drawMatch(state, { myId: MY_ID, auto: AUTO, joy: input.joy, buttons: input.buttons }, dt);
+  countdownT -= dt;
+  ctx.fillStyle = 'rgba(0,0,0,0.4)';
+  ctx.fillRect(0, 0, C.W, C.H);
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  const n = Math.ceil(countdownT / 0.8);
+  ctx.font = 'bold 90px system-ui, sans-serif';
+  ctx.lineWidth = 10;
+  ctx.strokeStyle = '#12121c';
+  ctx.fillStyle = '#fff';
+  const label = n > 0 ? String(n) : 'GO!';
+  ctx.strokeText(label, C.W / 2, C.H / 2 - 40);
+  ctx.fillText(label, C.W / 2, C.H / 2 - 40);
+  if (countdownT <= 0) {
+    mode = 'play';
+    beep(880, 0.25, 'triangle', 0.07);
+  }
+  input.consumeTap();
+}
+
+function drawResult(dt) {
+  renderer.clear();
+  renderer.drawMatch(state, { myId: MY_ID, auto: true, joy: input.joy, buttons: input.buttons }, dt);
+  resultT += dt;
+  const k = Math.min(1, resultT / 0.9);
+  ctx.fillStyle = 'rgba(10,10,18,0.78)';
+  ctx.fillRect(0, 0, C.W, C.H);
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+
+  const heading = result.win === -1 ? 'ドロー' : result.win === 0 ? 'WIN!' : 'LOSE…';
+  ctx.font = 'bold 54px system-ui, sans-serif';
+  ctx.fillStyle = result.win === 0 ? '#ffd54a' : result.win === 1 ? '#8a8b9e' : '#cfd0e0';
+  ctx.fillText(heading, C.W / 2, 120);
+
+  // 塗り率バー (アニメーション)
+  const barY = 210;
+  for (let team = 0; team < 2; team++) {
+    const c = team === 0 ? result.c0 : result.c1;
+    const y = barY + team * 70;
+    ctx.font = 'bold 15px system-ui, sans-serif';
+    ctx.textAlign = 'left';
+    ctx.fillStyle = C.TEAM_COLORS[team].main;
+    ctx.fillText(team === 0 ? 'あなたのチーム' : 'あいてチーム', 30, y - 16);
+    ctx.fillStyle = 'rgba(255,255,255,0.12)';
+    renderer.roundRect(30, y, 300, 26, 13);
+    ctx.fill();
+    ctx.fillStyle = C.TEAM_COLORS[team].main;
+    const w = Math.max(10, 300 * c * k);
+    renderer.roundRect(30, y, w, 26, 13);
+    ctx.fill();
+    ctx.textAlign = 'right';
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 18px system-ui, sans-serif';
+    ctx.fillText(`${(c * k * 100).toFixed(1)}%`, 330, y + 13);
+  }
+
+  if (!AUTO) {
+    ctx.textAlign = 'center';
+    ctx.font = '15px system-ui, sans-serif';
+    ctx.fillStyle = '#cfd0e0';
+    ctx.fillText(`たおした: ${result.kills}  やられた: ${result.deaths}  ぬった: ${result.painted}マス`, C.W / 2, 390);
+  }
+
+  // ボタン
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = C.TEAM_COLORS[0].main;
+  renderer.roundRect(60, 440, 240, 56, 28);
+  ctx.fill();
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 24px system-ui, sans-serif';
+  ctx.fillText('もういっかい!', C.W / 2, 468);
+  ctx.fillStyle = 'rgba(255,255,255,0.14)';
+  renderer.roundRect(100, 516, 160, 44, 22);
+  ctx.fill();
+  ctx.fillStyle = '#e8e8f2';
+  ctx.font = 'bold 18px system-ui, sans-serif';
+  ctx.fillText('タイトルへ', C.W / 2, 538);
+
+  const t = input.consumeTap();
+  if (resultT > 0.6) {
+    if (hitRect(t, 60, 440, 240, 56)) {
+      beep(660, 0.12, 'triangle', 0.06, 200);
+      startMatch();
+    } else if (hitRect(t, 100, 516, 160, 44)) {
+      mode = 'title';
+    }
+  }
+}
+
+// ---- メインループ (固定60Hzステップ + 可変描画) ----
+let last = performance.now();
+let acc = 0;
+function frame(now) {
+  requestAnimationFrame(frame);
+  let dt = (now - last) / 1000;
+  last = now;
+  if (dt > 0.25) dt = 0.25; // タブ復帰などの巨大デルタは捨てる
+
+  ctx.setTransform(drawScale, 0, 0, drawScale, 0, 0);
+
+  if (mode === 'title') {
+    drawTitle();
+    return;
+  }
+  if (mode === 'countdown') {
+    drawCountdown(dt);
+    return;
+  }
+  if (mode === 'play') {
+    acc += dt;
+    let guard = 0;
+    while (acc >= C.TICK && guard++ < 8 && mode === 'play') {
+      acc -= C.TICK;
+      stepPlay();
+    }
+    renderer.clear();
+    if (mode === 'play' || mode === 'result') {
+      renderer.drawMatch(state, { myId: MY_ID, auto: AUTO, joy: input.joy, buttons: input.buttons }, dt);
+    }
+    if (mode === 'result') drawResult(0);
+    input.consumeTap();
+    return;
+  }
+  if (mode === 'result') {
+    drawResult(dt);
+  }
+}
+requestAnimationFrame(frame);
+
+if (AUTO) startMatch();
+
+// テスト・デバッグ用フック
+window.__INKRUSH = {
+  get mode() {
+    return mode;
+  },
+  get state() {
+    return state;
+  },
+  get result() {
+    return result;
+  },
+  coverage: () => (state ? coverage(state) : null),
+  start: (di) => {
+    if (di !== undefined) diffIndex = di;
+    startMatch();
+  },
+  skipCountdown: () => {
+    countdownT = 0;
+  },
+  // テスト用: 試合をNシミュレーション秒ぶん一気に進める
+  fastForward: (sec) => {
+    if (mode === 'countdown') {
+      mode = 'play';
+      countdownT = 0;
+    }
+    const steps = Math.round(sec / C.TICK);
+    for (let i = 0; i < steps && mode === 'play'; i++) stepPlay();
+  },
+};
+
+</script>
+</body>
+</html>

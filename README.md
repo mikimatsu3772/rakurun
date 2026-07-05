@@ -20,6 +20,17 @@ npm start
 
 実機で動かす場合は Expo Go アプリで QR を読む。
 
+## ミニゲーム: INK RUSH
+
+`game/` にスマホブラウザで遊べる陣取りインクシューター (スプラトゥーン風 2D) が入っている。
+
+```bash
+cd game && python3 -m http.server 8000   # → スマホで http://<PCのIP>:8000
+```
+
+または `game/dist/inkrush.html` 1ファイルをスマホに送って開くだけでも遊べる。
+詳細は [game/DESIGN.md](game/DESIGN.md)、バランス調整の記録は [game/BALANCE.md](game/BALANCE.md)。
+
 ## 開発状況
 
 MVPフェーズ:
