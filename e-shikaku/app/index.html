@@ -1,0 +1,717 @@
+<title>E資格 演習ドリル</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --paper:      #EDF1F7;
+    --card:       #FFFFFF;
+    --card-sunk:  #F4F7FB;
+    --ink:        #141A28;
+    --ink-soft:   #4A5468;
+    --ink-faint:  #7C879B;
+    --rule:       #D6DEEA;
+    --grid:       rgba(43, 63, 168, .062);
+    --accent:     #2B3FA8;
+    --accent-dim: rgba(43, 63, 168, .10);
+    --on-accent:  #FFFFFF;
+    --correct:    #14724F;
+    --correct-bg: rgba(20, 114, 79, .10);
+    --wrong:      #B63A33;
+    --wrong-bg:   rgba(182, 58, 51, .10);
+    --shadow:     0 1px 2px rgba(20, 26, 40, .05), 0 8px 24px -12px rgba(20, 26, 40, .18);
+
+    --jp: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Hiragino Kaku Gothic ProN",
+          "Noto Sans JP", "Yu Gothic UI", "Yu Gothic", Meiryo, sans-serif;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+            "Roboto Mono", "Courier New", monospace;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper:      #0B0F1A;
+      --card:       #151C2C;
+      --card-sunk:  #1B2334;
+      --ink:        #E3E9F4;
+      --ink-soft:   #B7C1D6;
+      --ink-faint:  #7E8AA2;
+      --rule:       #29334A;
+      --grid:       rgba(133, 152, 245, .07);
+      --accent:     #8B9EF7;
+      --accent-dim: rgba(139, 158, 247, .14);
+      --on-accent:  #0B0F1A;
+      --correct:    #4BC08C;
+      --correct-bg: rgba(75, 192, 140, .13);
+      --wrong:      #F0766C;
+      --wrong-bg:   rgba(240, 118, 108, .13);
+      --shadow:     0 1px 2px rgba(0, 0, 0, .3), 0 8px 24px -12px rgba(0, 0, 0, .6);
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --paper: #0B0F1A; --card: #151C2C; --card-sunk: #1B2334;
+    --ink: #E3E9F4; --ink-soft: #B7C1D6; --ink-faint: #7E8AA2;
+    --rule: #29334A; --grid: rgba(133, 152, 245, .07);
+    --accent: #8B9EF7; --accent-dim: rgba(139, 158, 247, .14);
+    --on-accent: #0B0F1A;
+    --correct: #4BC08C; --correct-bg: rgba(75, 192, 140, .13);
+    --wrong: #F0766C; --wrong-bg: rgba(240, 118, 108, .13);
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.6);
+  }
+
+  :root[data-theme="light"] {
+    --paper: #EDF1F7; --card: #FFFFFF; --card-sunk: #F4F7FB;
+    --ink: #141A28; --ink-soft: #4A5468; --ink-faint: #7C879B;
+    --rule: #D6DEEA; --grid: rgba(43, 63, 168, .062);
+    --accent: #2B3FA8; --accent-dim: rgba(43, 63, 168, .10);
+    --on-accent: #FFFFFF;
+    --correct: #14724F; --correct-bg: rgba(20, 114, 79, .10);
+    --wrong: #B63A33; --wrong-bg: rgba(182, 58, 51, .10);
+    --shadow: 0 1px 2px rgba(20,26,40,.05), 0 8px 24px -12px rgba(20,26,40,.18);
+  }
+
+  body {
+    margin: 0;
+    padding: 0 0 4rem;
+    background-color: var(--paper);
+    background-image:
+      linear-gradient(var(--grid) 1px, transparent 1px),
+      linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+    background-size: 26px 26px;
+    color: var(--ink);
+    font-family: var(--jp);
+    font-size: 16px;
+    line-height: 1.75;
+    -webkit-text-size-adjust: 100%;
+  }
+
+  .wrap { max-width: 41rem; margin: 0 auto; padding: 0 1rem; }
+
+  /* ---- 計器バー ---- */
+  .gauge {
+    position: sticky; top: 0; z-index: 20;
+    background: color-mix(in srgb, var(--paper) 88%, transparent);
+    backdrop-filter: blur(8px);
+    border-bottom: 1px solid var(--rule);
+    margin-bottom: 1.75rem;
+  }
+  .gauge-in {
+    max-width: 41rem; margin: 0 auto; padding: .6rem 1rem;
+    display: flex; align-items: center; gap: 1.25rem;
+  }
+  .gauge-item { display: flex; flex-direction: column; line-height: 1.25; }
+  .gauge-item .k {
+    font-size: .625rem; letter-spacing: .1em; text-transform: uppercase;
+    color: var(--ink-faint); font-family: var(--mono);
+  }
+  .gauge-item .v {
+    font-family: var(--mono); font-size: 1.0625rem; font-weight: 600;
+    font-variant-numeric: tabular-nums; color: var(--ink);
+  }
+  .gauge-item .v small { font-size: .75rem; font-weight: 400; color: var(--ink-faint); }
+  .gauge-spacer { flex: 1; }
+  .gauge .brand {
+    font-family: var(--mono); font-size: .6875rem; letter-spacing: .14em;
+    color: var(--accent); font-weight: 600;
+  }
+
+  /* ---- 見出し ---- */
+  .lede { margin: 0 0 2rem; }
+  .lede h1 {
+    font-size: 1.625rem; line-height: 1.35; margin: 0 0 .35rem;
+    letter-spacing: .01em; text-wrap: balance; font-weight: 700;
+  }
+  .lede p { margin: 0; color: var(--ink-soft); font-size: .9375rem; }
+
+  .sec-label {
+    font-family: var(--mono); font-size: .6875rem; letter-spacing: .13em;
+    text-transform: uppercase; color: var(--ink-faint);
+    margin: 2rem 0 .75rem; display: block;
+  }
+
+  /* ---- モード選択 ---- */
+  .modes { display: flex; flex-direction: column; gap: .625rem; }
+  .mode {
+    display: flex; align-items: center; gap: .875rem; width: 100%;
+    background: var(--card); border: 1px solid var(--rule); border-radius: 10px;
+    padding: .9375rem 1rem; text-align: left; cursor: pointer;
+    font: inherit; color: var(--ink); box-shadow: var(--shadow);
+    transition: border-color .14s, transform .14s;
+  }
+  .mode:hover { border-color: var(--accent); }
+  .mode:active { transform: translateY(1px); }
+  .mode:disabled { opacity: .45; cursor: not-allowed; }
+  .mode:disabled:hover { border-color: var(--rule); }
+  .mode .glyph {
+    flex: 0 0 auto; width: 2.25rem; height: 2.25rem; border-radius: 7px;
+    background: var(--accent-dim); color: var(--accent);
+    display: grid; place-items: center;
+    font-family: var(--mono); font-size: .875rem; font-weight: 700;
+  }
+  .mode .body { flex: 1; min-width: 0; }
+  .mode .body b { display: block; font-size: .9375rem; font-weight: 600; }
+  .mode .body span { display: block; font-size: .8125rem; color: var(--ink-soft); line-height: 1.5; }
+  .mode .n {
+    font-family: var(--mono); font-size: .8125rem; color: var(--ink-faint);
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* ---- 分野リスト ---- */
+  .fields { display: flex; flex-direction: column; gap: 1px; background: var(--rule);
+            border: 1px solid var(--rule); border-radius: 10px; overflow: hidden; }
+  .field {
+    display: flex; align-items: center; gap: .875rem; width: 100%;
+    background: var(--card); border: 0; padding: .8125rem 1rem;
+    font: inherit; color: var(--ink); cursor: pointer; text-align: left;
+    transition: background .14s;
+  }
+  .field:hover { background: var(--card-sunk); }
+  .field .fname { flex: 1; font-size: .9375rem; min-width: 0; }
+  .field .fname i {
+    font-style: normal; font-family: var(--mono); font-size: .75rem;
+    color: var(--ink-faint); margin-left: .4375rem;
+    font-variant-numeric: tabular-nums;
+  }
+  .field .bar {
+    flex: 0 0 4.5rem; height: 5px; border-radius: 3px;
+    background: var(--card-sunk); overflow: hidden;
+    box-shadow: inset 0 0 0 1px var(--rule);
+  }
+  .field .bar i { display: block; height: 100%; background: var(--accent); border-radius: 3px; }
+  .field .pct {
+    flex: 0 0 3.25rem; text-align: right; font-family: var(--mono);
+    font-size: .8125rem; font-variant-numeric: tabular-nums; color: var(--ink-soft);
+  }
+
+  /* ---- 問題カード ---- */
+  .qcard {
+    background: var(--card); border: 1px solid var(--rule); border-radius: 12px;
+    box-shadow: var(--shadow); overflow: hidden;
+  }
+  .qhead {
+    display: flex; align-items: center; gap: .75rem;
+    padding: .75rem 1.125rem; border-bottom: 1px solid var(--rule);
+    background: var(--card-sunk);
+  }
+  .chip {
+    font-family: var(--mono); font-size: .6875rem; letter-spacing: .06em;
+    padding: .1875rem .5rem; border-radius: 4px;
+    background: var(--accent-dim); color: var(--accent); font-weight: 600;
+  }
+  .qhead .count {
+    margin-left: auto; font-family: var(--mono); font-size: .8125rem;
+    color: var(--ink-faint); font-variant-numeric: tabular-nums;
+  }
+  .qbody { padding: 1.25rem 1.125rem; }
+  .qtext { margin: 0 0 1.25rem; font-size: 1.0625rem; line-height: 1.7; text-wrap: pretty; }
+  .qtext b { font-weight: 700; }
+  .qtext sub, .qtext sup { font-family: var(--mono); font-size: .7em; }
+
+  .choices { display: flex; flex-direction: column; gap: .5rem; }
+  .choice {
+    display: flex; align-items: flex-start; gap: .75rem; width: 100%;
+    min-height: 3rem; padding: .75rem .875rem;
+    background: var(--card); border: 1.5px solid var(--rule); border-radius: 9px;
+    font: inherit; font-size: .9375rem; line-height: 1.6; color: var(--ink);
+    text-align: left; cursor: pointer;
+    transition: border-color .14s, background .14s;
+  }
+  .choice:hover:not(:disabled) { border-color: var(--accent); background: var(--accent-dim); }
+  .choice:disabled { cursor: default; }
+  .choice .key {
+    flex: 0 0 auto; width: 1.375rem; height: 1.375rem; margin-top: .0625rem;
+    border-radius: 4px; background: var(--card-sunk); color: var(--ink-faint);
+    box-shadow: inset 0 0 0 1px var(--rule);
+    display: grid; place-items: center;
+    font-family: var(--mono); font-size: .75rem; font-weight: 600;
+  }
+  .choice .txt { flex: 1; min-width: 0; }
+  .choice sub, .choice sup { font-family: var(--mono); font-size: .72em; }
+
+  .choice.is-correct {
+    border-color: var(--correct); background: var(--correct-bg);
+  }
+  .choice.is-correct .key { background: var(--correct); color: var(--card); box-shadow: none; }
+  .choice.is-wrong {
+    border-color: var(--wrong); background: var(--wrong-bg);
+  }
+  .choice.is-wrong .key { background: var(--wrong); color: var(--card); box-shadow: none; }
+
+  /* ---- 解説 ---- */
+  .explain {
+    margin-top: 1.125rem; padding: .9375rem 1rem;
+    background: var(--card-sunk); border-radius: 9px;
+    border-left: 3px solid var(--accent);
+    animation: rise .22s ease-out;
+  }
+  @keyframes rise { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: none; } }
+  @media (prefers-reduced-motion: reduce) {
+    .explain { animation: none; }
+    .mode, .choice, .field { transition: none; }
+  }
+  .explain .verdict {
+    font-family: var(--mono); font-size: .75rem; letter-spacing: .08em;
+    font-weight: 700; display: block; margin-bottom: .375rem;
+  }
+  .explain.ok .verdict { color: var(--correct); }
+  .explain.ng .verdict { color: var(--wrong); }
+  .explain p { margin: 0; font-size: .875rem; line-height: 1.8; color: var(--ink); }
+  .explain sub, .explain sup { font-family: var(--mono); font-size: .72em; }
+  .explain b { color: var(--ink); font-weight: 600; }
+
+  /* ---- ボタン ---- */
+  .actions { display: flex; gap: .625rem; margin-top: 1.25rem; }
+  .btn {
+    flex: 1; min-height: 2.875rem; padding: .625rem 1rem;
+    border-radius: 9px; border: 1.5px solid transparent;
+    font: inherit; font-size: .9375rem; font-weight: 600; cursor: pointer;
+    transition: opacity .14s, border-color .14s;
+  }
+  .btn-primary { background: var(--accent); color: var(--on-accent); }
+  .btn-primary:hover { opacity: .88; }
+  .btn-ghost { background: transparent; border-color: var(--rule); color: var(--ink-soft); flex: 0 0 auto; }
+  .btn-ghost:hover { border-color: var(--accent); color: var(--accent); }
+
+  /* ---- 結果 ---- */
+  .score {
+    text-align: center; padding: 2rem 1rem 1.75rem;
+    background: var(--card); border: 1px solid var(--rule);
+    border-radius: 12px; box-shadow: var(--shadow);
+  }
+  .score .big {
+    font-family: var(--mono); font-size: 3.25rem; font-weight: 700; line-height: 1;
+    font-variant-numeric: tabular-nums; letter-spacing: -.02em;
+  }
+  .score .big small { font-size: 1.25rem; color: var(--ink-faint); font-weight: 400; }
+  .score .cap { color: var(--ink-soft); font-size: .875rem; margin-top: .5rem; }
+  .score .msg { margin-top: 1rem; font-size: .9375rem; color: var(--ink); }
+
+  .review { margin-top: 1.5rem; display: flex; flex-direction: column; gap: .5rem; }
+  .rv {
+    display: flex; gap: .75rem; align-items: flex-start;
+    padding: .75rem .875rem; background: var(--card);
+    border: 1px solid var(--rule); border-left-width: 3px; border-radius: 8px;
+    font-size: .875rem; line-height: 1.6;
+  }
+  .rv.ok { border-left-color: var(--correct); }
+  .rv.ng { border-left-color: var(--wrong); }
+  .rv .mk { font-family: var(--mono); font-weight: 700; flex: 0 0 auto; }
+  .rv.ok .mk { color: var(--correct); }
+  .rv.ng .mk { color: var(--wrong); }
+
+  .empty {
+    text-align: center; padding: 2.5rem 1rem; color: var(--ink-soft);
+    background: var(--card); border: 1px dashed var(--rule); border-radius: 12px;
+    font-size: .9375rem;
+  }
+
+  .foot {
+    margin-top: 2.5rem; padding-top: 1.25rem; border-top: 1px solid var(--rule);
+    font-size: .8125rem; color: var(--ink-faint); display: flex;
+    align-items: center; gap: .75rem; flex-wrap: wrap;
+  }
+  .foot button {
+    background: none; border: 0; padding: 0; font: inherit; font-size: .8125rem;
+    color: var(--ink-faint); text-decoration: underline; cursor: pointer;
+  }
+  .foot button:hover { color: var(--wrong); }
+  .foot .kbd-hint { margin-left: auto; font-family: var(--mono); font-size: .6875rem; }
+
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+  [hidden] { display: none !important; }
+</style>
+
+<div class="gauge">
+  <div class="gauge-in">
+    <span class="brand">E-SHIKAKU</span>
+    <div class="gauge-spacer"></div>
+    <div class="gauge-item">
+      <span class="k">試験まで</span>
+      <span class="v" id="g-days">—<small> 日</small></span>
+    </div>
+    <div class="gauge-item">
+      <span class="k">通算正答率</span>
+      <span class="v" id="g-acc">—<small>%</small></span>
+    </div>
+    <div class="gauge-item">
+      <span class="k">解答数</span>
+      <span class="v" id="g-total">0</span>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+  <!-- ========== ホーム ========== -->
+  <section id="view-home">
+    <div class="lede">
+      <h1>E資格 演習ドリル</h1>
+      <p>解いて、間違えて、解説を読む。間違えた問題は自動で復習キューに入ります。</p>
+    </div>
+
+    <span class="sec-label">演習モード</span>
+    <div class="modes">
+      <button class="mode" data-mode="random">
+        <span class="glyph">R</span>
+        <span class="body">
+          <b>ランダム 10問</b>
+          <span>全分野から出題。実力の確認に</span>
+        </span>
+        <span class="n" id="n-all">—</span>
+      </button>
+      <button class="mode" data-mode="weak" id="mode-weak">
+        <span class="glyph">W</span>
+        <span class="body">
+          <b>弱点復習</b>
+          <span>直近で間違えた問題だけを再出題</span>
+        </span>
+        <span class="n" id="n-weak">0</span>
+      </button>
+      <button class="mode" data-mode="fresh" id="mode-fresh">
+        <span class="glyph">N</span>
+        <span class="body">
+          <b>未挑戦の問題</b>
+          <span>まだ一度も解いていない問題から</span>
+        </span>
+        <span class="n" id="n-fresh">—</span>
+      </button>
+    </div>
+
+    <span class="sec-label">分野別に解く</span>
+    <div class="fields" id="field-list"></div>
+
+    <div class="foot">
+      <span id="foot-stat">まだ記録はありません</span>
+      <button id="btn-reset">記録を消去</button>
+      <span class="kbd-hint">1–4 で解答 / Enter で次へ</span>
+    </div>
+  </section>
+
+  <!-- ========== 出題 ========== -->
+  <section id="view-quiz" hidden>
+    <div class="qcard">
+      <div class="qhead">
+        <span class="chip" id="q-field">—</span>
+        <span class="count" id="q-count">—</span>
+      </div>
+      <div class="qbody">
+        <p class="qtext" id="q-text"></p>
+        <div class="choices" id="q-choices"></div>
+        <div class="explain" id="q-explain" hidden>
+          <span class="verdict" id="q-verdict"></span>
+          <p id="q-explain-text"></p>
+        </div>
+        <div class="actions">
+          <button class="btn btn-ghost" id="btn-quit">中断</button>
+          <button class="btn btn-primary" id="btn-next" hidden>次の問題へ</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ========== 結果 ========== -->
+  <section id="view-result" hidden>
+    <div class="score">
+      <div class="big" id="r-score">—<small>/10</small></div>
+      <div class="cap" id="r-cap">—</div>
+      <div class="msg" id="r-msg"></div>
+    </div>
+    <span class="sec-label">解答の振り返り</span>
+    <div class="review" id="r-review"></div>
+    <div class="actions">
+      <button class="btn btn-ghost" id="btn-home">ホーム</button>
+      <button class="btn btn-primary" id="btn-again">もう1セット</button>
+    </div>
+  </section>
+</div>
+
+<script src="questions.js"></script>
+<script>
+(function () {
+  "use strict";
+
+  var Q = window.QUESTIONS || [];
+  var EXAM_DATE = "2026-08-25";
+  var STORE = "eshikaku.v1";
+  var SET_SIZE = 10;
+
+  // ---------- 永続化 ----------
+  var db = load();
+
+  function load() {
+    try {
+      var raw = localStorage.getItem(STORE);
+      if (raw) {
+        var p = JSON.parse(raw);
+        if (p && p.stats) return p;
+      }
+    } catch (e) { /* 破損時は初期化 */ }
+    return { stats: {}, answered: 0, correct: 0 };
+  }
+
+  function save() {
+    try { localStorage.setItem(STORE, JSON.stringify(db)); } catch (e) { /* 容量超過時は無視 */ }
+  }
+
+  function stat(i) {
+    if (!db.stats[i]) db.stats[i] = { seen: 0, ok: 0, wrong: 0 };
+    return db.stats[i];
+  }
+
+  // ---------- 選択集合 ----------
+  function allIdx() { return Q.map(function (_, i) { return i; }); }
+  function weakIdx() {
+    return allIdx().filter(function (i) { return db.stats[i] && db.stats[i].wrong > 0; });
+  }
+  function freshIdx() {
+    return allIdx().filter(function (i) { return !db.stats[i] || db.stats[i].seen === 0; });
+  }
+  function fieldIdx(f) {
+    return allIdx().filter(function (i) { return Q[i].f === f; });
+  }
+
+  function shuffle(a) {
+    var r = a.slice();
+    for (var i = r.length - 1; i > 0; i--) {
+      var j = Math.floor(Math.random() * (i + 1));
+      var t = r[i]; r[i] = r[j]; r[j] = t;
+    }
+    return r;
+  }
+
+  var FIELDS = (function () {
+    var seen = [];
+    Q.forEach(function (q) { if (seen.indexOf(q.f) < 0) seen.push(q.f); });
+    return seen;
+  })();
+
+  // ---------- 画面 ----------
+  var el = function (id) { return document.getElementById(id); };
+  var views = { home: el("view-home"), quiz: el("view-quiz"), result: el("view-result") };
+
+  function show(name) {
+    Object.keys(views).forEach(function (k) { views[k].hidden = (k !== name); });
+    window.scrollTo(0, 0);
+  }
+
+  // ---------- 計器 ----------
+  function daysLeft() {
+    var now = new Date();
+    var today = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate());
+    var p = EXAM_DATE.split("-");
+    var exam = Date.UTC(+p[0], +p[1] - 1, +p[2]);
+    return Math.round((exam - today) / 86400000);
+  }
+
+  function paintGauge() {
+    var d = daysLeft();
+    el("g-days").innerHTML = (d >= 0 ? d : "—") + "<small> 日</small>";
+    var acc = db.answered ? Math.round(db.correct / db.answered * 100) : null;
+    el("g-acc").innerHTML = (acc === null ? "—" : acc) + "<small>%</small>";
+    el("g-total").textContent = db.answered;
+  }
+
+  function paintHome() {
+    el("n-all").textContent = Q.length + " 問";
+    var w = weakIdx(), f = freshIdx();
+    el("n-weak").textContent = w.length + " 問";
+    el("n-fresh").textContent = f.length + " 問";
+    el("mode-weak").disabled = w.length === 0;
+    el("mode-fresh").disabled = f.length === 0;
+
+    var list = el("field-list");
+    list.textContent = "";
+    FIELDS.forEach(function (f) {
+      var idx = fieldIdx(f);
+      var seen = 0, ok = 0;
+      idx.forEach(function (i) {
+        var s = db.stats[i];
+        if (s && s.seen) { seen += s.seen; ok += s.ok; }
+      });
+      var pct = seen ? Math.round(ok / seen * 100) : 0;
+
+      var b = document.createElement("button");
+      b.className = "field";
+      b.type = "button";
+
+      var name = document.createElement("span");
+      name.className = "fname";
+      name.textContent = f;
+      var cnt = document.createElement("i");
+      cnt.textContent = idx.length + "問";
+      name.appendChild(cnt);
+
+      var bar = document.createElement("span");
+      bar.className = "bar";
+      var fill = document.createElement("i");
+      fill.style.width = pct + "%";
+      bar.appendChild(fill);
+
+      var p = document.createElement("span");
+      p.className = "pct";
+      p.textContent = seen ? pct + "%" : "未着手";
+
+      b.appendChild(name); b.appendChild(bar); b.appendChild(p);
+      b.addEventListener("click", function () { start(fieldIdx(f), f); });
+      list.appendChild(b);
+    });
+
+    var fs = el("foot-stat");
+    fs.textContent = db.answered
+      ? "通算 " + db.answered + " 問中 " + db.correct + " 問正解"
+      : "まだ記録はありません";
+  }
+
+  // ---------- 出題 ----------
+  var run = null;
+
+  function start(pool, label) {
+    if (!pool.length) return;
+    var order = shuffle(pool).slice(0, SET_SIZE);
+    run = { order: order, at: 0, log: [], label: label || "演習", pool: pool };
+    show("quiz");
+    paintQ();
+  }
+
+  function paintQ() {
+    var qi = run.order[run.at];
+    var q = Q[qi];
+
+    // 選択肢は毎回並べ替える。位置で正解を覚えてしまうのを防ぐため。
+    run.perm = shuffle([0, 1, 2, 3].slice(0, q.a.length));
+
+    el("q-field").textContent = q.f;
+    el("q-count").textContent = (run.at + 1) + " / " + run.order.length;
+    el("q-text").innerHTML = q.q;
+    el("q-explain").hidden = true;
+    el("btn-next").hidden = true;
+
+    var box = el("q-choices");
+    box.textContent = "";
+    run.perm.forEach(function (orig, k) {
+      var b = document.createElement("button");
+      b.className = "choice";
+      b.type = "button";
+
+      var key = document.createElement("span");
+      key.className = "key";
+      key.textContent = String(k + 1);
+
+      var t = document.createElement("span");
+      t.className = "txt";
+      t.innerHTML = q.a[orig];
+
+      b.appendChild(key); b.appendChild(t);
+      b.addEventListener("click", function () { answer(k); });
+      box.appendChild(b);
+    });
+  }
+
+  function answer(pick) {
+    var qi = run.order[run.at];
+    var q = Q[qi];
+    var shownCorrect = run.perm.indexOf(q.c);
+    var ok = run.perm[pick] === q.c;
+
+    var btns = el("q-choices").children;
+    for (var i = 0; i < btns.length; i++) {
+      btns[i].disabled = true;
+      if (i === shownCorrect) btns[i].className = "choice is-correct";
+      else if (i === pick) btns[i].className = "choice is-wrong";
+    }
+
+    var s = stat(qi);
+    s.seen++;
+    if (ok) { s.ok++; if (s.wrong > 0) s.wrong--; }
+    else { s.wrong++; }
+    db.answered++;
+    if (ok) db.correct++;
+    save();
+    paintGauge();
+
+    run.log.push({ qi: qi, ok: ok });
+
+    var box = el("q-explain");
+    box.className = "explain " + (ok ? "ok" : "ng");
+    box.hidden = false;
+    el("q-verdict").textContent = ok ? "正解" : "不正解 — 正答は " + (shownCorrect + 1);
+    el("q-explain-text").innerHTML = q.e;
+
+    var next = el("btn-next");
+    next.hidden = false;
+    next.textContent = (run.at + 1 >= run.order.length) ? "結果を見る" : "次の問題へ";
+    next.focus();
+  }
+
+  function next() {
+    run.at++;
+    if (run.at >= run.order.length) finish();
+    else paintQ();
+  }
+
+  // ---------- 結果 ----------
+  function finish() {
+    var n = run.log.length;
+    var ok = run.log.filter(function (r) { return r.ok; }).length;
+    var pct = Math.round(ok / n * 100);
+
+    el("r-score").innerHTML = ok + "<small>/" + n + "</small>";
+    el("r-cap").textContent = run.label + " — 正答率 " + pct + "%";
+    el("r-msg").textContent =
+      pct === 100 ? "全問正解。この分野は仕上がっています。" :
+      pct >= 80 ? "good。取りこぼした問題だけ弱点復習で潰しましょう。" :
+      pct >= 50 ? "半分は取れています。解説を読み直してから再挑戦を。" :
+                  "ここが伸びしろです。解説をじっくり読んでから弱点復習へ。";
+
+    var rv = el("r-review");
+    rv.textContent = "";
+    run.log.forEach(function (r, i) {
+      var d = document.createElement("div");
+      d.className = "rv " + (r.ok ? "ok" : "ng");
+      var mk = document.createElement("span");
+      mk.className = "mk";
+      mk.textContent = r.ok ? "○" : "×";
+      var tx = document.createElement("span");
+      tx.innerHTML = (i + 1) + ". " + Q[r.qi].q;
+      d.appendChild(mk); d.appendChild(tx);
+      rv.appendChild(d);
+    });
+
+    paintHome();
+    show("result");
+  }
+
+  // ---------- 操作 ----------
+  document.querySelectorAll(".mode").forEach(function (b) {
+    b.addEventListener("click", function () {
+      var m = b.getAttribute("data-mode");
+      if (m === "random") start(allIdx(), "ランダム");
+      else if (m === "weak") start(weakIdx(), "弱点復習");
+      else if (m === "fresh") start(freshIdx(), "未挑戦");
+    });
+  });
+
+  el("btn-next").addEventListener("click", next);
+  el("btn-quit").addEventListener("click", function () { paintHome(); show("home"); });
+  el("btn-home").addEventListener("click", function () { paintHome(); show("home"); });
+  el("btn-again").addEventListener("click", function () { start(run.pool, run.label); });
+
+  el("btn-reset").addEventListener("click", function () {
+    if (!confirm("これまでの解答記録をすべて消去します。よろしいですか?")) return;
+    db = { stats: {}, answered: 0, correct: 0 };
+    save();
+    paintGauge(); paintHome();
+  });
+
+  document.addEventListener("keydown", function (ev) {
+    if (views.quiz.hidden) return;
+    if (ev.key >= "1" && ev.key <= "4") {
+      var btns = el("q-choices").children;
+      var k = +ev.key - 1;
+      if (btns[k] && !btns[k].disabled) { btns[k].click(); ev.preventDefault(); }
+    } else if (ev.key === "Enter" && !el("btn-next").hidden) {
+      next(); ev.preventDefault();
+    }
+  });
+
+  paintGauge();
+  paintHome();
+})();
+</script>
