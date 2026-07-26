@@ -1,0 +1,22 @@
+name: E資格 デイリーフォローアップ
+
+on:
+  schedule:
+    # 06:55 JST (21:55 UTC 前日)
+    - cron: '55 21 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  daily-followup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 今日のタスクをIssueにコメント
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: '4'
+        run: bash e-shikaku/scripts/daily-followup.sh
